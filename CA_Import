@@ -1,0 +1,116 @@
+#Test import script 
+# Connect to Microsoft Graph API
+Connect-MgGraph -TenantId "140a1dfe-72e9-4d13-9f58-26098b5f815d"
+
+# Define group properties
+# Confirmed works
+$groupParams = @{
+    DisplayName = "CA - International Travelers"
+    Description = "Travelers Group"
+    MailEnabled = $false
+    MailNickname = "InternationalTravelers"
+    SecurityEnabled = $true
+    GroupTypes = @()
+}
+
+# Create the group
+New-MgGroup -BodyParameter $groupParams
+
+Write-Host "Group created successfully." -ForegroundColor Green
+
+#Get command for Group object ID
+$groupName = "CA - International Travelers"  # Replace with your actual group name
+
+
+#Create Standard Allowed Countries for only US
+$params = @{
+    "@odata.type" = "#microsoft.graph.countryNamedLocation"
+    DisplayName = "Standard Allowed Countries"
+    CountriesAndRegions = @("US")  # ISO 3166-2 country code
+    IncludeUnknownCountriesAndRegions = $false
+    IsTrusted = $true
+}
+# Create the named location
+New-MgIdentityConditionalAccessNamedLocation -BodyParameter $params
+
+
+#Create Travel Exception Allowed Countries for exemption group
+$params = @{
+    "@odata.type" = "#microsoft.graph.countryNamedLocation"
+    DisplayName = "Travel Exception Allowed Countries"
+    CountriesAndRegions = @("US")  # ISO 3166-2 country code
+    IncludeUnknownCountriesAndRegions = $false
+    IsTrusted = $true
+}
+# Create the named location
+New-MgIdentityConditionalAccessNamedLocation -BodyParameter $params
+
+
+
+#Import CA Policies 
+# Confirmed working
+$jsonFilesDirectory = "C:\Powershell_Work\Travel"
+
+# Get all JSON files in the directory
+$jsonFiles = Get-ChildItem -Path $jsonFilesDirectory -Filter *.json
+
+# Check if there are no JSON files
+if ($jsonFiles.Count -eq 0) {
+    Write-Host "No JSON files found in the directory to import." -ForegroundColor Yellow
+}
+else {
+    # Loop through each JSON file
+    foreach ($jsonFile in $jsonFiles) {
+        try {
+            # Read the content of the JSON file and convert it to a PowerShell object
+            $policyJson = Get-Content -Path $jsonFile.FullName | ConvertFrom-Json
+            
+# Define the group name
+$groupName = "CA - International Travelers"  # Replace with your actual group name
+
+# Get the group object
+$group = Get-MgGroup -Filter "displayName eq '$groupName'"
+
+# Store the Object ID
+$groupId = $group.Id
+
+$namedLocation = Get-MgIdentityConditionalAccessNamedLocation -Filter "displayName eq 'Travel Exception Allowed Countries'"
+$locationID = $namedLocation.Id
+
+
+if (-not $policyJson.conditions) {
+    $policyJson | Add-Member -MemberType NoteProperty -Name conditions -Value @{}
+}
+if (-not $policyJson.conditions.users) {
+    $policyJson.conditions | Add-Member -MemberType NoteProperty -Name users -Value @{}
+}
+
+# Add the group ID to excludeGroups
+$policyJson.conditions.users.includeGroups = @($groupId)
+$policyJson.conditions.locations.excludeLocations = @($locationID)
+
+            
+            # Create a custom object
+            $policyObject = [PSCustomObject]@{
+                displayName     = $policyJson.displayName
+                conditions      = $policyJson.conditions
+                grantControls   = $policyJson.grantControls
+                sessionControls = $policyJson.sessionControls
+                state           = $policyJson.state
+            }
+
+            # Convert the custom object to JSON with a depth of 10
+            $policyJsonString = $policyObject | ConvertTo-Json -Depth 10
+
+            # Create the Conditional Access policy using the Microsoft Graph API
+            $null = New-MgIdentityConditionalAccessPolicy -Body $policyJsonString
+
+            # Print a success message
+            Write-Host "Policy created successfully: $($policyJson.displayName) " -ForegroundColor Green
+        }
+        catch {
+            # Print an error message if an exception occurs
+            Write-Host "An error occurred while creating the policy: $_" -ForegroundColor Red
+        }
+    }
+}
